@@ -1,61 +1,101 @@
-import fugashi
 from pathlib import Path
-import os, sys
 import struct
+import re
 
-from pprint import pprint
 
-tagger = fugashi.Tagger()
-
-foo = "今日はラヌーの日だ"
-zzz = tagger(foo)
-bar = [word.surface for word in tagger(foo)]
-
-def dump(obj):
-	for attr in dir(obj):
-		if(attr[0:2] != '__'):
-			print("obj.%s = %r" % (attr, getattr(obj, attr)))
-
-# for x in tagger(foo):
-	# dump(x)
-
-#file_list = list(Path("A:/content0.game/romfs/common/").rglob("*.fs"))
+# top level directory containing subfolders with script files
 base = Path("A:/content0.game/romfs/common/")
-file_list = base.rglob("*.fs")
-folder_list = (sorted([*{f.parent.name for f in file_list}]))
+file_list = [f for f in base.rglob('*.*') if f.name != 'index.fs']
 
+# place output file in current script directory
 cwd = Path(__file__).resolve().parent
 out = Path(str(cwd) + "/test_dump.txt")
+
+# empty the file before we start writing to it
 out.open("w").close()
 out = out.open("a")
 
-for folder in folder_list:
-	print(f"{folder=}")
-	out.write("==="*10 + "\n")
-	out.write(f"{folder=}\n")
-	idx = Path(base / folder / "index.fs")
-	crowd = Path(base / folder / "crowd.fs")
-	with open(idx, 'rb') as fx:
-		next_ptr = struct.unpack("<I", fx.read(4))[0]
-		while(next_ptr):
-			print(f"{next_ptr=}")
-			out.write((f"\n{next_ptr=}\n"))
-			file_ptr = struct.unpack("<I", fx.read(4))[0]
-			file_len = struct.unpack("<I", fx.read(4))[0]
-			mystery1 = struct.unpack("<I", fx.read(4))[0]
-			file_name = fx.read(next_ptr-fx.tell()-4).decode()
 
-			print(f"{file_ptr=}, {file_name=}")
-			out.write(f"{file_ptr=}, {file_name=}\n")
-			with open(crowd, 'rb') as f:
-				f.seek(file_ptr+6*4,0)
-				script_ptr = struct.unpack("<I", f.read(4))[0]
-				script_len = struct.unpack("<I", f.read(4))[0]
-				print(f"{script_ptr=}, {script_len=}")
-				out.write(f"{script_ptr=}, {script_len=}\n")
-				f.seek(file_ptr+script_ptr, 0)
-				out.write(f.read(script_len).decode("utf-16", "ignore").replace('\x00','\n'))
+def fprint(text, mode="both", fout=out):
+	""" outputs text to mode: stdout, file, or both """
+
+	if mode == 'stdout' or mode == 'both':
+		print(text)
+	if mode == 'file' or mode == 'both':
+		out.write(str(text) + '\n')
 
 
-			fx.seek(next_ptr, 0)
-			next_ptr = struct.unpack("<I", fx.read(4))[0]
+def extract_text(src_file, loc, length):
+	""" return a string: length bytes from loc in src_file with enc encoding """
+
+	src_file.seek(loc, 0)
+	text = src_file.read(length).decode("utf-16", "ignore")
+	text = re.sub(r'\x00+', '\n', text)
+	return text
+
+
+def read_header(src_file, file_ptr):
+	""" return rel_ptr, abs_ptr, script_len from src_file @ file_ptr location """
+	# skip first four bytes of file header
+	src_file.seek(file_ptr+4*4, 0)
+
+	# relative pointers for two text blocks and their lengths
+	names_ptr, names_len, script_ptr, script_len = \
+		struct.unpack("<IIII", src_file.read(16))
+	return {
+			"rel_ptr": script_ptr,
+			"script_len": script_len,
+			"abs_ptr": script_ptr+file_ptr
+			}
+
+
+def find_and_dump(script_path):
+	""" dump text from all files in file_list """
+
+	fprint("==="*15)
+	if f.suffix == '.fs':
+		index_path = Path(f.parents[0] / 'index.fs')
+
+		with open(index_path, 'rb') as index_file:
+
+			next_ptr = struct.unpack("<I", index_file.read(4))[0]
+
+			while(True):
+
+				file_ptr, file_len, mystery = struct.unpack("<III", index_file.read(12))
+				if next_ptr > 0:
+					name_length = next_ptr - index_file.tell()
+				else:
+					name_length = None
+				file_name = index_file.read(name_length).decode()
+				file_name = re.sub(r'\x00+', '', file_name)
+
+				with open(script_path, 'rb') as script_file:
+					header = read_header(script_file, file_ptr)
+					if header['script_len'] > 0:
+						fprint("Script File: " + "/".join(script_path.parts[3:]))
+						fprint(f"{file_ptr=}, {file_name=}")
+						fprint(f"{header['abs_ptr']=}, {header['script_len']=}")
+						fprint("==="*15)
+						text = extract_text(script_file, header['abs_ptr'], header['script_len'])
+						fprint(text, 'file')
+
+				index_file.seek(next_ptr, 0)
+
+				if next_ptr == 0:
+					break
+				next_ptr = struct.unpack("<I", index_file.read(4))[0]
+
+	else:
+		with open(script_path, 'rb') as script_file:
+			header = read_header(script_file, 0)
+			if header['script_len'] > 0:
+				fprint("Script File: " + "/".join(script_path.parts[3:]))
+				fprint(f"{header['abs_ptr']=}, {header['script_len']=}")
+				fprint("==="*15)
+				text = extract_text(script_file, header['abs_ptr'], header['script_len'])
+				fprint(text, 'file')
+
+
+for f in file_list:
+	find_and_dump(f)
