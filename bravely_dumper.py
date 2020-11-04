@@ -83,7 +83,8 @@ def find_and_dump(script_path):
 
 		with open(index_path, 'rb') as index_file:
 
-			while(True):
+			next_ptr = 1
+			while(next_ptr):
 
 				next_ptr, file_ptr, file_len, mystery = \
 						struct.unpack("<IIII", index_file.read(16))
@@ -102,9 +103,6 @@ def find_and_dump(script_path):
 				read_script(script_path, file_ptr, file_name)
 				index_file.seek(next_ptr, 0)
 
-				# exit loop if there are no more pointers in index.fs
-				if next_ptr == 0:
-					break
 
 	# if extension is not .fs, there's no index file to parse
 	else:
